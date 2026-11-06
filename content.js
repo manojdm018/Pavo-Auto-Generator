@@ -8,7 +8,7 @@
   };
   const KEY = "pavoQueueState";
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const norm = s => (s || "").replace(/\\s+/g, " ").trim().toLowerCase();
+  const norm = s => (s || "").replace(/\s+/gg, " ").trim().toLowerCase();
 
   async function state() {
     const d = await chrome.storage.local.get(KEY);
@@ -71,7 +71,7 @@
         if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
 
         const text = norm(el.innerText || el.textContent);
-        if (!/^(generate image|generate video)\\b/i.test(text)) return false;
+        if (!/^(generate image|generate video)\b/i.test(text)) return false;
 
         const star = el.querySelector('img[src*="generate-star-white.svg"]');
         return !!star;
@@ -79,11 +79,11 @@
   }
 
   function imageMenuButtons() {
-    return menuButtons().filter(b => /^generate image\\b/i.test(norm(b.innerText || b.textContent)));
+    return menuButtons().filter(b => /^generate image\b/i.test(norm(b.innerText || b.textContent)));
   }
 
   function videoMenuButtons() {
-    return menuButtons().filter(b => /^generate video\\b/i.test(norm(b.innerText || b.textContent)));
+    return menuButtons().filter(b => /^generate video\b/i.test(norm(b.innerText || b.textContent)));
   }
 
   function findClickableAncestor(el) {
