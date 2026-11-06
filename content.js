@@ -32,11 +32,11 @@
     return [...document.querySelectorAll("button,[role='button']")].filter(visible);
   }
   function generating() {
-    const activePattern = /\\b(generating|processing|rendering|creating|uploading)\\b/i;
+    const activePattern = /\b(generating|processing|rendering|creating|uploading)\b/i;
     const explicitText = [...document.querySelectorAll("body *")].some(el => {
       if (!visible(el) || el.children.length > 3) return false;
       const t = norm(el.innerText || el.textContent);
-      return /^(generating(?:\\.{1,3})?|processing(?:\\.{1,3})?|creating (?:image|video)(?:\\.{1,3})?|rendering(?:\\.{1,3})?|uploading(?:\\.{1,3})?)$/.test(t) ||
+      return /^(generating(?:\.{1,3})?|processing(?:\.{1,3})?|creating (?:image|video)(?:\.{1,3})?|rendering(?:\.{1,3})?|uploading(?:\.{1,3})?)$/.test(t) ||
         activePattern.test(t);
     });
     const stop = buttons().some(b => /^(stop|cancel)$/.test(label(b)));
@@ -144,7 +144,7 @@
   function cardIsActive(card) {
     if (!card || !card.isConnected) return false;
     const text = norm(card.innerText || card.textContent);
-    if (/\\b(generating|processing|rendering|creating|uploading|queued)\\b/.test(text)) return true;
+    if (/\b(generating|processing|rendering|creating|uploading|queued)\b/.test(text)) return true;
     return [...card.querySelectorAll("button,[role='button']")]
       .some(b => /^(stop|cancel)$/.test(label(b)));
   }
@@ -162,7 +162,7 @@
     if (kind === "Image") {
       return realImages.length > 0 ||
         /image (ready|generated|complete)|reference image/.test(text) ||
-        (!text.includes("waiting to generate") && !/\\b(generating|processing|rendering|creating|uploading)\\b/.test(text));
+        (!text.includes("waiting to generate") && !/\b(generating|processing|rendering|creating|uploading)\b/.test(text));
     }
 
     return card.querySelector("video") !== null ||
