@@ -48,6 +48,74 @@
     );
   }
 
+  // Pavo renders each scene as a self-contained card. The card supplied by
+  // the user has the distinctive aspect-[533/300] class and contains both
+  // the scene state text and its Generate button. Use that relationship
+  // instead of assuming that the Nth global Generate button is Scene N.
+  function sceneCards() {
+    const cards = [];
+    const seen = new Set();
+
+    for (const button of sceneGenerateButtons()) {
+      let p = button.parentElement;
+      let card = null;
+
+      for (let depth = 0; p && depth < 8; depth++, p = p.parentElement) {
+        const cls = typeof p.className === "string" ? p.className : "";
+        const hasAspect = cls.includes("aspect-[533/300]");
+        const hasGenerate = [...p.querySelectorAll("button")].some(
+          b => /^generate$/.test(label(b))
+        );
+
+        if (hasAspect && hasGenerate) {
+          card = p;
+          break;
+        }
+      }
+
+      // Fallback: use the nearest ancestor that owns exactly one Generate
+      // button and has meaningful scene content.
+      if (!card) {
+        p = button.parentElement;
+        for (let depth = 0; p && depth < 8; depth++, p = p.parentElement) {
+          const owned = [...p.querySelectorAll("button")].filter(
+            b => /^generate$/.test(label(b))
+          );
+          const text = norm(p.innerText || p.textContent);
+          if (owned.length === 1 && text.length > 10) {
+            card = p;
+            break;
+          }
+        }
+      }
+
+      if (card && !seen.has(card)) {
+        seen.add(card);
+        cards.push(card);
+      }
+    }
+
+    return cards;
+  }
+
+  function generateButtonInCard(card) {
+    if (!card) return null;
+    return [...card.querySelectorAll("button")].find(b =>
+      visible(b) &&
+      /^generate$/.test(label(b)) &&
+      !b.disabled &&
+      b.getAttribute("aria-disabled") !== "true"
+    ) || null;
+  }
+
+  function sceneCardInfo() {
+    return sceneCards().map((card, index) => ({
+      index,
+      text: norm(card.innerText || card.textContent).slice(0, 180),
+      button: !!generateButtonInCard(card)
+    }));
+  }
+
   function allVisibleElementsDeep(root = document) {
     const out = [];
     const visit = node => {
@@ -135,20 +203,29 @@
     return false;
   }
 
-  async function findSceneButton(index, timeoutMs = 6000) {
+  async function findSceneButton(index, timeoutMs = 10000) {
     const started = Date.now();
 
     while (c.running && Date.now() - started < timeoutMs) {
-      let list = sceneGenerateButtons();
-      if (list[index]) {
-        await bringIntoView(list[index], 2);
-        // Re-query after scrolling because React/Pavo may re-render the list.
-        list = sceneGenerateButtons();
-        if (list[index]) return list[index];
+      const cards = sceneCards();
+      const card = cards[index];
+
+      if (card) {
+        const button = generateButtonInCard(card);
+        if (button) {
+          await bringIntoView(card, 3);
+          await sleep(250);
+
+          // React can replace the card while scrolling. Re-find the card
+          // after it settles, then return its current Generate button.
+          const refreshed = sceneCards()[index];
+          const refreshedButton = generateButtonInCard(refreshed || card);
+          if (refreshedButton) return refreshedButton;
+        }
       }
 
-      // If the scene list is virtualized, the target button may not exist in
-      // the DOM yet. Advance the likely scroll container and keep scanning.
+      // If the requested card is virtualized, progressively scroll the
+      // largest scroll container until more scene cards are mounted.
       const candidates = [...document.querySelectorAll("*")].filter(el => {
         if (!(el instanceof HTMLElement) || !visible(el)) return false;
         return el.scrollHeight > el.clientHeight + 200 &&
@@ -160,13 +237,28 @@
       )[0];
 
       if (target) {
-        const step = Math.max(300, Math.floor(target.clientHeight * 0.75));
-        target.scrollTop = Math.min(target.scrollTop + step, target.scrollHeight - target.clientHeight);
+        const step = Math.max(350, Math.floor(target.clientHeight * 0.65));
+        const before = target.scrollTop;
+        target.scrollTop = Math.min(
+          target.scrollTop + step,
+          target.scrollHeight - target.clientHeight
+        );
+
+        // If it cannot scroll farther, try the page itself.
+        if (target.scrollTop === before) {
+          window.scrollBy({
+            top: Math.max(350, Math.floor(window.innerHeight * 0.65)),
+            behavior: "instant"
+          });
+        }
       } else {
-        window.scrollBy({top: Math.max(400, Math.floor(window.innerHeight * 0.7)), behavior: "instant"});
+        window.scrollBy({
+          top: Math.max(350, Math.floor(window.innerHeight * 0.65)),
+          behavior: "instant"
+        });
       }
 
-      await sleep(350);
+      await sleep(450);
     }
 
     return null;
@@ -297,12 +389,6 @@
         [sceneKey(sceneIndex)]: {status: "in-progress", updatedAt: Date.now()}
       });
 
-      const sceneButton = sceneButtons[sceneIndex];
-      if (!sceneButton) {
-        await pause("No scene Generate button found. Check the page and press Resume.");
-        return;
-      }
-
       const positionedSceneButton = await findSceneButton(sceneIndex);
       if (!positionedSceneButton) {
         await pause("Could not locate Scene " + (sceneIndex + 1) + " on screen. Check the scene list and press Resume.");
@@ -334,21 +420,32 @@
       await save({status: "Reference image completed — opening menu for Generate Video"});
       await sleep(1000);
 
-      // Pavo closes the generation menu after the image is created.
-      // Re-open this SAME scene's Generate menu before looking for Video.
-      const currentButtons = sceneGenerateButtons();
-      const videoSceneButton = currentButtons[sceneIndex];
-      if (!videoSceneButton) {
-        await pause("The current scene Generate button was not found after the image. Check Pavo and press Resume.");
-        return;
+      // After image generation, Pavo may either keep the menu open or close it.
+      // First look for Generate Video directly. Only reopen the SAME scene if
+      // the video action is not already visible.
+      let videoButton = videoMenuButtons()[0];
+
+      if (!videoButton) {
+        const videoSceneButton = await findSceneButton(sceneIndex, 8000);
+        if (!videoSceneButton) {
+          await pause("The current scene card was not found after the image. Check Pavo and press Resume.");
+          return;
+        }
+
+        await bringIntoView(videoSceneButton, 3);
+        await sleep(300);
+
+        // Check one more time after scrolling; opening the menu is only the
+        // fallback because clicking Generate while its menu is already open
+        // can close it.
+        videoButton = videoMenuButtons()[0];
+
+        if (!videoButton) {
+          forceClick(videoSceneButton);
+          await sleep(500);
+          videoButton = await waitForMenuButton("video");
+        }
       }
-
-      await bringIntoView(videoSceneButton, 3);
-      await sleep(300);
-      forceClick(videoSceneButton);
-      await sleep(500);
-
-      const videoButton = await waitForMenuButton("video");
       if (!videoButton) {
         await pause("Generate Video was not found in the reopened scene menu. Check Pavo and press Resume.");
         return;
@@ -434,6 +531,7 @@
         ok: true,
         generating: generating(),
         generateButtons: sceneGenerateButtons().length,
+        sceneCards: sceneCardInfo(),
         videoMenuButtons: videoCandidates.length,
         videoCandidateTexts: videoCandidates.slice(0, 5).map(label)
       });
