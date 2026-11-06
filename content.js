@@ -7,6 +7,7 @@
     startedAt: 0, stableChecks: 0, maxMs: 12 * 60 * 1000
   };
   const KEY = "pavoQueueState";
+  const sceneKey = i => "pavoScene_" + i;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const norm = s => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -212,13 +213,21 @@
       const stBefore = await state();
       const sceneIndex = Number(stBefore.completed || 0);
       const sceneButtons = sceneGenerateButtons();
+
+      // The completed count is our durable checkpoint. Also persist the
+      // current scene index so a page refresh can resume from the same scene.
+      await chrome.storage.local.set({
+        [sceneKey(sceneIndex)]: {status: "in-progress", updatedAt: Date.now()}
+      });
+
       const sceneButton = sceneButtons[sceneIndex];
       if (!sceneButton) {
         await pause("No scene Generate button found. Check the page and press Resume.");
         return;
       }
 
-      sceneButton.scrollIntoView({behavior: "instant", block: "center", inline: "nearest"});
+      sceneButton.scrollIntoView({behavior: "smooth", block: "center", inline: "nearest"});
+      await sleep(600);
       await sleep(250);
 
       if (generating()) {
@@ -246,13 +255,15 @@
 
       // Pavo closes the generation menu after the image is created.
       // Re-open this SAME scene's Generate menu before looking for Video.
-      const videoSceneButton = sceneGenerateButtons()[sceneIndex];
+      const currentButtons = sceneGenerateButtons();
+      const videoSceneButton = currentButtons[sceneIndex];
       if (!videoSceneButton) {
         await pause("The current scene Generate button was not found after the image. Check Pavo and press Resume.");
         return;
       }
 
-      videoSceneButton.scrollIntoView({behavior: "instant", block: "center", inline: "center"});
+      videoSceneButton.scrollIntoView({behavior: "smooth", block: "center", inline: "center"});
+      await sleep(600);
       await sleep(300);
       forceClick(videoSceneButton);
       await sleep(500);
@@ -270,8 +281,12 @@
       const st = await state();
       const nextCompleted = (st.completed || 0) + 1;
       const nextDelay = 5;
+      await chrome.storage.local.set({
+        [sceneKey(sceneIndex)]: {status: "completed", completedAt: Date.now()}
+      });
       await save({
         completed: nextCompleted,
+        currentScene: nextCompleted,
         status: "Completed — scrolling to next scene",
         nextAt: Date.now() + nextDelay * 1000,
         nextDelay
@@ -280,9 +295,13 @@
       c.busy = false;
 
       // Move the next scene into view before starting it.
-      const nextButton = sceneGenerateButtons()[nextCompleted];
+      // Re-scan after completion because Pavo may re-render the scene list.
+      await sleep(400);
+      const nextButtons = sceneGenerateButtons();
+      const nextButton = nextButtons[nextCompleted];
       if (nextButton) {
         nextButton.scrollIntoView({behavior: "smooth", block: "center", inline: "nearest"});
+        await sleep(700);
       }
 
       for (let remaining = nextDelay; remaining > 0 && c.running && !c.paused; remaining--) {
@@ -309,7 +328,7 @@
     if (c.running) return {ok: true};
     if (generating()) return {ok: false, error: "Pavo is already generating. Let it finish before starting."};
     c.running = true; c.paused = false;
-    await save({running: true, paused: false, status: "Scanning for Generate"});
+    await save({running: true, paused: false, status: "Resuming from scene " + ((await state()).completed || 0) + " — scanning"});
     processOne();
     return {ok: true};
   }
