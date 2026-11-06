@@ -105,14 +105,13 @@
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
 
-    // First use the native click.
-    if (typeof target.click === "function") target.click();
-
-    // Then dispatch real mouse/pointer-style events for UI libraries that
-    // listen to pointer events on the clickable surface.
-    for (const type of ["pointerover", "pointermove", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-      const EventClass = type.startsWith("pointer") ? PointerEvent : MouseEvent;
-      target.dispatchEvent(new EventClass(type, {
+    // Use ONE click only. Pavo's Generate button toggles the menu.
+    // Sending native click + synthetic click events can open it and immediately
+    // close it again, which is especially bad when reopening the menu for Video.
+    if (typeof target.click === "function") {
+      target.click();
+    } else {
+      target.dispatchEvent(new MouseEvent("click", {
         bubbles: true,
         cancelable: true,
         view: window,
@@ -120,12 +119,6 @@
         clientY: y,
         button: 0
       }));
-    }
-
-    // Finally click the element actually sitting under the center point.
-    const under = document.elementFromPoint(x, y);
-    if (under && under !== target && target.contains(under)) {
-      if (typeof under.click === "function") under.click();
     }
   }
 
