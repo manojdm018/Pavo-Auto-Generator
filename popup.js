@@ -19,7 +19,18 @@ async function refresh() {
     return;
   }
   try {
-    const scan = await chrome.tabs.sendMessage(tab.id,{type:"PAVO_SCAN"});
+    let scan;
+    try {
+      scan = await chrome.tabs.sendMessage(tab.id,{type:"PAVO_SCAN"});
+    } catch (firstError) {
+      // If Pavo was opened before the extension loaded, the declarative
+      // content script may not exist in the current document. Inject it.
+      await chrome.scripting.executeScript({
+        target: {tabId: tab.id},
+        files: ["content.js"]
+      });
+      scan = await chrome.tabs.sendMessage(tab.id,{type:"PAVO_SCAN"});
+    }
     $("buttons").textContent = String(scan.generateButtons);
     $("hint").textContent = scan.generating ? "A video is generating; another will not be started." : "Ready to scan the scene list.";
   } catch {
