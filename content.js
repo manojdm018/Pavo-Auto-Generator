@@ -38,7 +38,7 @@
     // in the DOM the user shared.
     const previewCards = [...document.querySelectorAll('[class*="aspect-[533/300]"]')]
       .filter(visible);
-    const activeLabel = /^(generating(?:\\.{1,3})?|processing(?:\\.{1,3})?|creating (?:image|video)(?:\\.{1,3})?|rendering(?:\\.{1,3})?|uploading(?:\\.{1,3})?|queued(?:\\.{1,3})?)$/i;
+    const activeLabel = /^(generating(?:[.]{1,3})?|processing(?:[.]{1,3})?|creating (?:image|video)(?:[.]{1,3})?|rendering(?:[.]{1,3})?|uploading(?:[.]{1,3})?|queued(?:[.]{1,3})?)$/i;
     const evidence = [];
 
     for (const card of previewCards) {
