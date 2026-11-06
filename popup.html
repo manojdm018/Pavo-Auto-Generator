@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pavo Queue</title><link rel="stylesheet" href="popup.css"></head>
+<body><main class="app">
+<header><div class="mark">P</div><div><h1>Pavo Queue</h1><p>One video generation at a time</p></div></header>
+<section class="card"><div class="status"><i id="dot"></i><strong id="status">Checking Pavo…</strong></div>
+<div class="metrics"><div><small>Generate buttons</small><b id="buttons">—</b></div><div><small>Completed</small><b id="completed">0</b></div></div>
+<p id="hint">Open a Pavo episode review page.</p></section>
+<section class="controls"><button id="start" class="primary">Start queue</button><div class="row"><button id="pause">Pause</button><button id="resume">Resume</button><button id="stop" class="danger">Stop</button></div></section>
+<footer><p>If Pavo's state is unclear, automation pauses instead of risking overlapping generations.</p><a href="https://app.pavo-ai.work/" target="_blank">Open Pavo</a></footer><div id="error" role="alert"></div>
+</main><script src="popup.js"></script></body></html>
