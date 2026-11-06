@@ -87,6 +87,91 @@
     return menuButtons().filter(b => /^generate video\b/i.test(norm(b.innerText || b.textContent)));
   }
 
+
+  function scrollableParents(el) {
+    const out = [];
+    let p = el?.parentElement;
+    while (p && p !== document.body && p !== document.documentElement) {
+      const s = getComputedStyle(p);
+      const canScrollY = /(auto|scroll)/.test(s.overflowY) && p.scrollHeight > p.clientHeight + 20;
+      const canScrollX = /(auto|scroll)/.test(s.overflowX) && p.scrollWidth > p.clientWidth + 20;
+      if (canScrollY || canScrollX) out.push(p);
+      p = p.parentElement;
+    }
+    return out;
+  }
+
+  async function bringIntoView(el, attempts = 3) {
+    if (!el) return false;
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        el.scrollIntoView({behavior: "instant", block: "center", inline: "nearest"});
+      } catch (_) {}
+
+      // Pavo can place the scene list inside a nested scroll container.
+      // Move every scrollable ancestor so the button is actually visible,
+      // rather than relying only on the page viewport.
+      const parents = scrollableParents(el);
+      const rect = el.getBoundingClientRect();
+
+      for (const p of parents) {
+        const pr = p.getBoundingClientRect();
+        const targetTop = p.scrollTop + (rect.top - pr.top) - (p.clientHeight - rect.height) / 2;
+        p.scrollTop = Math.max(0, Math.min(targetTop, p.scrollHeight - p.clientHeight));
+      }
+
+      window.scrollTo({
+        top: Math.max(0, window.scrollY + el.getBoundingClientRect().top - (window.innerHeight - el.getBoundingClientRect().height) / 2),
+        behavior: "instant"
+      });
+
+      await sleep(250);
+
+      const r = el.getBoundingClientRect();
+      const inViewport = r.bottom > 20 && r.top < window.innerHeight - 20;
+      if (inViewport) return true;
+    }
+    return false;
+  }
+
+  async function findSceneButton(index, timeoutMs = 6000) {
+    const started = Date.now();
+
+    while (c.running && Date.now() - started < timeoutMs) {
+      let list = sceneGenerateButtons();
+      if (list[index]) {
+        await bringIntoView(list[index], 2);
+        // Re-query after scrolling because React/Pavo may re-render the list.
+        list = sceneGenerateButtons();
+        if (list[index]) return list[index];
+      }
+
+      // If the scene list is virtualized, the target button may not exist in
+      // the DOM yet. Advance the likely scroll container and keep scanning.
+      const candidates = [...document.querySelectorAll("*")].filter(el => {
+        if (!(el instanceof HTMLElement) || !visible(el)) return false;
+        return el.scrollHeight > el.clientHeight + 200 &&
+          /(auto|scroll)/.test(getComputedStyle(el).overflowY);
+      });
+
+      const target = candidates.sort((a, b) =>
+        (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+      )[0];
+
+      if (target) {
+        const step = Math.max(300, Math.floor(target.clientHeight * 0.75));
+        target.scrollTop = Math.min(target.scrollTop + step, target.scrollHeight - target.clientHeight);
+      } else {
+        window.scrollBy({top: Math.max(400, Math.floor(window.innerHeight * 0.7)), behavior: "instant"});
+      }
+
+      await sleep(350);
+    }
+
+    return null;
+  }
+
   function findClickableAncestor(el) {
     let current = el;
     for (let i = 0; current && i < 6; i++, current = current.parentElement) {
@@ -100,7 +185,6 @@
 
   function forceClick(el) {
     const target = findClickableAncestor(el);
-    target.scrollIntoView({behavior: "instant", block: "center", inline: "center"});
     const rect = target.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
@@ -219,9 +303,13 @@
         return;
       }
 
-      sceneButton.scrollIntoView({behavior: "smooth", block: "center", inline: "nearest"});
-      await sleep(600);
-      await sleep(250);
+      const positionedSceneButton = await findSceneButton(sceneIndex);
+      if (!positionedSceneButton) {
+        await pause("Could not locate Scene " + (sceneIndex + 1) + " on screen. Check the scene list and press Resume.");
+        return;
+      }
+      await bringIntoView(positionedSceneButton, 3);
+      await sleep(300);
 
       if (generating()) {
         await pause("Generation detected before the scene Generate button was clicked.");
@@ -230,7 +318,7 @@
 
       // Each Pavo scene is a two-stage generation:
       // Scene Generate -> Generate Image -> wait -> Generate Video -> wait.
-      forceClick(sceneButton);
+      forceClick(positionedSceneButton);
       await save({status: "Scene menu opened — selecting Generate Image"});
 
       const imageButton = await waitForMenuButton("image");
@@ -255,8 +343,7 @@
         return;
       }
 
-      videoSceneButton.scrollIntoView({behavior: "smooth", block: "center", inline: "center"});
-      await sleep(600);
+      await bringIntoView(videoSceneButton, 3);
       await sleep(300);
       forceClick(videoSceneButton);
       await sleep(500);
@@ -290,11 +377,13 @@
       // Move the next scene into view before starting it.
       // Re-scan after completion because Pavo may re-render the scene list.
       await sleep(400);
-      const nextButtons = sceneGenerateButtons();
-      const nextButton = nextButtons[nextCompleted];
+      const nextButton = await findSceneButton(nextCompleted, 7000);
       if (nextButton) {
-        nextButton.scrollIntoView({behavior: "smooth", block: "center", inline: "nearest"});
-        await sleep(700);
+        await bringIntoView(nextButton, 3);
+        await sleep(500);
+      } else {
+        await pause("Completed Scene " + sceneIndex + ", but Scene " + (nextCompleted + 1) + " could not be located. Check the scene list and press Resume.");
+        return;
       }
 
       for (let remaining = nextDelay; remaining > 0 && c.running && !c.paused; remaining--) {
