@@ -33,9 +33,10 @@ async function refresh() {
     }
     $("buttons").textContent = String(scan.generateButtons);
     $("hint").textContent = scan.generating ? "A video is generating; another will not be started." : "Ready to scan the scene list.";
-  } catch {
-    $("status").textContent = "Refresh Pavo tab";
-    $("hint").textContent = "Reload the Pavo page after installing the extension.";
+  } catch (e) {
+    $("status").textContent = "Connection failed";
+    $("hint").textContent = e?.message || String(e);
+    $("error").textContent = e?.message || String(e);
   }
   const saved = await chrome.storage.local.get("pavoQueueState");
   paint(saved.pavoQueueState);
@@ -45,7 +46,16 @@ async function run(type) {
   try {
     const tab = await pavoTab();
     if (!tab?.id) throw new Error("Open the Pavo episode page in the active tab.");
-    const result = await chrome.tabs.sendMessage(tab.id,{type});
+    let result;
+    try {
+      result = await chrome.tabs.sendMessage(tab.id,{type});
+    } catch (firstError) {
+      await chrome.scripting.executeScript({
+        target: {tabId: tab.id},
+        files: ["content.js"]
+      });
+      result = await chrome.tabs.sendMessage(tab.id,{type});
+    }
     if (result?.ok === false) throw new Error(result.error || "Action failed.");
     await refresh();
   } catch (e) {$("error").textContent = e.message || "Could not contact Pavo. Refresh the tab.";}
