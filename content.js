@@ -8,7 +8,7 @@
   };
   const KEY = "pavoQueueState";
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const norm = s => (s || "").replace(/\s+/gg, " ").trim().toLowerCase();
+  const norm = s => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
 
   async function state() {
     const d = await chrome.storage.local.get(KEY);
@@ -207,7 +207,12 @@
       await sleep(700);
       if (!c.running) return;
 
-      const sceneButton = sceneGenerateButtons()[0];
+      // Use the completed-scene count to select the next unprocessed scene.
+      // Never fall back to [0], otherwise Pavo can regenerate Scene 1 forever.
+      const stBefore = await state();
+      const sceneIndex = Number(stBefore.completed || 0);
+      const sceneButtons = sceneGenerateButtons();
+      const sceneButton = sceneButtons[sceneIndex];
       if (!sceneButton) {
         await pause("No scene Generate button found. Check the page and press Resume.");
         return;
