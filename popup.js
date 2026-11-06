@@ -7,6 +7,8 @@ function paint(s) {
   if (!s) return;
   $("status").textContent = s.status || "Ready";
   $("completed").textContent = String(s.completed || 0);
+  const next = Number(s.nextAt || 0);
+  $("nextTimer").textContent = next > Date.now() ? Math.ceil((next - Date.now()) / 1000) + "s" : (s.running ? "Now" : "—");
   $("dot").className = s.paused ? "warning" : s.running ? "active" : "";
 }
 async function refresh() {
@@ -65,3 +67,7 @@ $("pause").addEventListener("click",()=>run("PAVO_PAUSE"));
 $("resume").addEventListener("click",()=>run("PAVO_RESUME"));
 $("stop").addEventListener("click",()=>run("PAVO_STOP"));
 refresh();
+setInterval(async () => {
+  const saved = await chrome.storage.local.get("pavoQueueState");
+  if (saved.pavoQueueState) paint(saved.pavoQueueState);
+}, 500);
