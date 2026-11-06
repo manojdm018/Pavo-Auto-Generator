@@ -252,6 +252,21 @@
   }
 
 
+  function visibleMenuActionLabels() {
+    return buttons()
+      .map(b => norm(b.innerText || b.textContent))
+      .filter(t => /^(generate image|generate video)\\b/.test(t));
+  }
+
+  function exactVideoMenuButton() {
+    return menuButtons().find(b => {
+      const text = norm(b.innerText || b.textContent);
+      const hasWhiteStar = !!b.querySelector('img[src*="generate-star-white.svg"]');
+      return /^generate video(?:\\s|$)/.test(text) && hasWhiteStar;
+    }) || null;
+  }
+
+
   function scrollableParents(el) {
     const out = [];
     let p = el?.parentElement;
@@ -510,119 +525,210 @@
         return;
       }
 
-      await sleep(700);
+      await sleep(500);
       if (!c.running) return;
 
-      // Use the completed-scene count to select the next unprocessed scene.
-      // Never fall back to [0], otherwise Pavo can regenerate Scene 1 forever.
       const stBefore = await state();
       const sceneIndex = Number(stBefore.completed || 0);
-      // The completed count is our durable checkpoint. Also persist the
-      // current scene index so a page refresh can resume from the same scene.
-      await chrome.storage.local.set({
-        [sceneKey(sceneIndex)]: {status: "in-progress", updatedAt: Date.now()}
+      const key = sceneKey(sceneIndex);
+      const stored = await chrome.storage.local.get(key);
+      const sceneProgress = stored[key] || {};
+      const imageAlreadyComplete =
+        sceneProgress.stage === "image-complete" ||
+        sceneProgress.stage === "video-in-progress";
+
+      await save({
+        currentScene: sceneIndex,
+        status: imageAlreadyComplete
+          ? "Scene " + (sceneIndex + 1) + ": image already complete — preparing Video"
+          : "Locating Scene " + (sceneIndex + 1)
       });
 
-      const positionedSceneButton = await findSceneButton(sceneIndex);
-      if (!positionedSceneButton) {
-        await pause("Could not locate Scene " + (sceneIndex + 1) + " on screen. Check the scene list and press Resume.");
+      const sceneButton = await findSceneButton(sceneIndex, 12000);
+      if (!sceneButton) {
+        await pause("Could not locate Scene " + (sceneIndex + 1) + ". Check the scene list and press Resume.");
         return;
       }
-      await bringIntoView(positionedSceneButton, 3);
-      await sleep(300);
 
-      const originalSceneCard = cardForSceneButton(positionedSceneButton, sceneIndex);
+      await bringIntoView(sceneButton, 3);
+      await sleep(250);
+
+      const originalSceneCard = cardForSceneButton(sceneButton, sceneIndex);
       const getCurrentSceneCard = () => {
-        const currentCards = sceneCards();
-        return currentCards[sceneIndex] ||
+        const cards = sceneCards();
+        return cards[sceneIndex] ||
           (originalSceneCard && originalSceneCard.isConnected ? originalSceneCard : null);
       };
 
-      if (generating()) {
-        await pause("Generation detected before the scene Generate button was clicked.");
-        return;
-      }
-
-      // Each Pavo scene is a two-stage generation:
-      // Scene Generate -> Generate Image -> wait -> Generate Video -> wait.
-      forceClick(positionedSceneButton);
-      await save({status: "Scene menu opened — selecting Generate Image"});
-
-      const imageButton = await waitForMenuButton("image");
-      if (!imageButton) {
-        await pause("Generate Image was not found in the menu. Check Pavo and press Resume.");
-        return;
-      }
-
-      const imageDone = await clickAndWaitForGeneration(imageButton, "Image", getCurrentSceneCard);
-      cleanup();
-      if (!imageDone) return;
-
-      await save({status: "Reference image confirmed — preparing Generate Video"});
-      await sleep(1000);
-
-      // After image generation, Pavo may either keep the menu open or close it.
-      // First look for Generate Video directly. Only reopen the SAME scene if
-      // the video action is not already visible.
-      let videoButton = videoMenuButtons()[0];
-
-      if (!videoButton) {
-        const videoSceneButton = await findSceneButton(sceneIndex, 8000);
-        if (!videoSceneButton) {
-          await pause("The current scene card was not found after the image. Check Pavo and press Resume.");
+      // Stage 1: Generate Image. This block is skipped permanently once the
+      // image-complete checkpoint has been saved, including after a refresh
+      // or Resume. The Image action is never selected in the Video stage.
+      if (!imageAlreadyComplete) {
+        if (generating()) {
+          await pause("A generation became active before Generate Image. Check Pavo.");
           return;
         }
 
-        await bringIntoView(videoSceneButton, 3);
-        await sleep(300);
+        await chrome.storage.local.set({
+          [key]: {
+            ...sceneProgress,
+            status: "image-in-progress",
+            stage: "image-in-progress",
+            updatedAt: Date.now()
+          }
+        });
 
-        // Check one more time after scrolling; opening the menu is only the
-        // fallback because clicking Generate while its menu is already open
-        // can close it.
-        videoButton = videoMenuButtons()[0];
+        forceClick(sceneButton);
+        await save({status: "Scene " + (sceneIndex + 1) + ": opening Image/Video menu"});
 
-        if (!videoButton) {
-          forceClick(videoSceneButton);
-          await sleep(500);
-          videoButton = await waitForMenuButton("video");
+        const imageButton = await waitForMenuButton("image", 10000);
+        if (!imageButton) {
+          await pause("Generate Image was not found. No action was selected.");
+          return;
+        }
+
+        const imageDone = await clickAndWaitForGeneration(
+          imageButton,
+          "Image",
+          getCurrentSceneCard
+        );
+        cleanup();
+        if (!imageDone) return;
+
+        // Save this immediately, before attempting to open or select Video.
+        await chrome.storage.local.set({
+          [key]: {
+            status: "image-complete",
+            stage: "image-complete",
+            imageCompletedAt: Date.now()
+          }
+        });
+        await save({status: "Scene " + (sceneIndex + 1) + ": image complete — selecting Video"});
+      } else {
+        await save({status: "Scene " + (sceneIndex + 1) + ": skipping Image (already complete)"});
+      }
+
+      // Stage 2: Generate Video. First inspect the current menu. If the
+      // menu is closed, open it ONCE. If Image is visible but Video is not,
+      // stop safely; never click Image and never toggle an already-open menu.
+      let videoButton = exactVideoMenuButton();
+
+      if (!videoButton) {
+        const visibleActions = visibleMenuActionLabels();
+
+        if (visibleActions.some(t => /^generate image(?:\\s|$)/.test(t))) {
+          await pause(
+            "Image is already complete, but Pavo's open menu does not expose a detectable Generate Video action. Visible actions: " +
+            visibleActions.join(" | ") +
+            ". I did not select Image again."
+          );
+          return;
+        }
+
+        const currentSceneButton = await findSceneButton(sceneIndex, 10000);
+        if (!currentSceneButton) {
+          await pause("Image is complete, but the current scene's Generate button could not be located to open the Video menu.");
+          return;
+        }
+
+        await bringIntoView(currentSceneButton, 3);
+        await sleep(250);
+
+        // Re-check after scrolling, before toggling the menu.
+        videoButton = exactVideoMenuButton();
+        const actionsAfterScroll = visibleMenuActionLabels();
+
+        if (!videoButton && actionsAfterScroll.some(t => /^generate image(?:\\s|$)/.test(t))) {
+          await pause(
+            "Image is complete, but Generate Video is not detectable in the open menu. Visible actions: " +
+            actionsAfterScroll.join(" | ") +
+            ". I did not select Image again."
+          );
+          return;
+        }
+
+        if (!videoButton && actionsAfterScroll.length === 0) {
+          forceClick(currentSceneButton);
+          await sleep(300);
+          videoButton = await waitForMenuButton("video", 10000);
         }
       }
+
+      // A final strict guard: absolutely no button other than the exact
+      // Generate Video action may be clicked in this stage.
       if (!videoButton) {
-        await pause("Generate Video was not found in the reopened scene menu. Check Pavo and press Resume.");
+        const actions = visibleMenuActionLabels();
+        await pause(
+          "Image is complete, but Generate Video could not be identified. Visible menu actions: " +
+          (actions.join(" | ") || "none") +
+          ". The Image action was not clicked again."
+        );
         return;
       }
 
-      const videoDone = await clickAndWaitForGeneration(videoButton, "Video", getCurrentSceneCard);
+      const videoText = norm(videoButton.innerText || videoButton.textContent);
+      if (!/^generate video(?:\\s|$)/.test(videoText)) {
+        await pause("Safety check blocked an unexpected menu action: " + videoText);
+        return;
+      }
+
+      await chrome.storage.local.set({
+        [key]: {
+          status: "video-in-progress",
+          stage: "video-in-progress",
+          imageCompletedAt: sceneProgress.imageCompletedAt || Date.now(),
+          videoStartedAt: Date.now()
+        }
+      });
+
+      const videoDone = await clickAndWaitForGeneration(
+        videoButton,
+        "Video",
+        getCurrentSceneCard
+      );
       cleanup();
       if (!videoDone) return;
 
-      const st = await state();
-      const nextCompleted = (st.completed || 0) + 1;
+      const currentState = await state();
+      const nextCompleted = (currentState.completed || 0) + 1;
       const nextDelay = 5;
+
       await chrome.storage.local.set({
-        [sceneKey(sceneIndex)]: {status: "completed", completedAt: Date.now()}
+        [key]: {
+          status: "completed",
+          stage: "completed",
+          completedAt: Date.now()
+        }
       });
+
       await save({
         completed: nextCompleted,
         currentScene: nextCompleted,
-        status: "Completed — scrolling to next scene",
+        status: "Scene " + (sceneIndex + 1) + " video complete — moving to next scene",
         nextAt: Date.now() + nextDelay * 1000,
         nextDelay
       });
 
       c.busy = false;
 
-      // Move the next scene into view before starting it.
-      // Re-scan after completion because Pavo may re-render the scene list.
       await sleep(400);
-      const nextButton = await findSceneButton(nextCompleted, 7000);
-      if (nextButton) {
-        await bringIntoView(nextButton, 3);
-        await sleep(500);
-      } else {
-        await pause("Completed Scene " + sceneIndex + ", but Scene " + (nextCompleted + 1) + " could not be located. Check the scene list and press Resume.");
+      const nextButton = await findSceneButton(nextCompleted, 10000);
+      if (!nextButton) {
+        // End cleanly when no next scene card exists. Do not repeatedly
+        // scroll forever or restart Scene 1.
+        await save({
+          running: false,
+          paused: false,
+          status: "Queue completed — no further scene found",
+          nextAt: 0,
+          nextDelay: 0
+        });
+        c.running = false;
         return;
       }
+
+      await bringIntoView(nextButton, 3);
+      await sleep(400);
 
       for (let remaining = nextDelay; remaining > 0 && c.running && !c.paused; remaining--) {
         await save({
@@ -634,9 +740,7 @@
       }
 
       await save({nextAt: 0, nextDelay: 0, status: "Starting next scene"});
-      if (c.running && !c.paused) {
-        await processOne();
-      }
+      if (c.running && !c.paused) await processOne();
     } catch (e) {
       cleanup();
       await pause(e.message || "Pavo state unclear; queue paused.");
@@ -644,6 +748,7 @@
       c.busy = false;
     }
   }
+
   async function start() {
     if (c.running) return {ok: true};
     const detection = generationStatus();
