@@ -48,11 +48,37 @@
   }
 
   function videoMenuButtons() {
-    return buttons().filter(b =>
-      /^generate video\\b/.test(label(b)) &&
-      !b.disabled &&
-      b.getAttribute("aria-disabled") !== "true"
+    // Pavo's popup may render the option as a div/button wrapper rather than
+    // a native <button>. Search all visible elements and select the smallest
+    // element whose visible text starts with "Generate Video".
+    const all = [...document.querySelectorAll("body *")]
+      .filter(visible)
+      .filter(el => {
+        const text = label(el);
+        return /^generate video(?:\\s|✦|$)/i.test(text) &&
+          text.length <= 80 &&
+          !/^generate video.*generate image/i.test(text);
+      });
+
+    // Prefer native buttons / role=button when available.
+    const preferred = all.filter(el =>
+      el.matches("button,[role='button']") &&
+      !el.disabled &&
+      el.getAttribute("aria-disabled") !== "true"
     );
+    if (preferred.length) return preferred;
+
+    // Otherwise choose the smallest matching visible element. This handles
+    // Pavo's popup components when the clickable surface is a div.
+    return all
+      .filter(el => {
+        const parent = el.parentElement;
+        if (!parent) return true;
+        const parentText = label(parent);
+        return !/^generate video(?:\\s|✦|$)/i.test(parentText) ||
+          parentText.length > 80;
+      })
+      .filter(el => el.getAttribute("aria-disabled") !== "true");
   }
   function cleanup() {
     c.observer?.disconnect();
@@ -135,6 +161,10 @@
         return;
       }
 
+      // Use a real pointer-style click first. Some Pavo UI components
+      // listen for pointer/click events on a wrapper instead of a native button.
+      videoButton.dispatchEvent(new PointerEvent("pointerdown", {bubbles:true, cancelable:true, view:window}));
+      videoButton.dispatchEvent(new PointerEvent("pointerup", {bubbles:true, cancelable:true, view:window}));
       videoButton.click();
 
       let started = false;
