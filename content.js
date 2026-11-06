@@ -47,42 +47,91 @@
     );
   }
 
+  function allVisibleElementsDeep(root = document) {
+    const out = [];
+    const visit = node => {
+      const children = node instanceof Document || node instanceof ShadowRoot
+        ? [...node.children]
+        : [...(node.children || [])];
+      for (const el of children) {
+        out.push(el);
+        if (el.shadowRoot) visit(el.shadowRoot);
+        visit(el);
+      }
+    };
+    visit(root);
+    return out;
+  }
+
   function videoMenuButtons() {
-    // Pavo's popup may render the option as a div/button wrapper rather than
-    // a native <button>. Search all visible elements and select the smallest
-    // element whose visible text starts with "Generate Video".
-    const all = [...document.querySelectorAll("body *")]
+    const all = allVisibleElementsDeep()
       .filter(visible)
       .filter(el => {
         const text = label(el);
-        // Pavo displays the two popup options as:
-        // "Generate Image ✦ 0"
-        // "Generate Video ✦ 0"
-        // We want ONLY the second one.
-        return /^generate video(?:\\s|✦|$)/i.test(text) &&
-          text.length <= 80;
+        return /^generate video(?:\\s|✦|$)/i.test(text) && text.length <= 80;
       });
 
-    // Prefer native buttons / role=button when available.
+    // Prefer the most directly clickable element. Pavo may use a native
+    // button, role=button, or a styled div inside a dialog.
     const preferred = all.filter(el =>
-      el.matches("button,[role='button']") &&
+      el.matches("button,[role='button'],a") &&
       !el.disabled &&
       el.getAttribute("aria-disabled") !== "true"
     );
     if (preferred.length) return preferred;
 
-    // Otherwise choose the smallest matching visible element. This handles
-    // Pavo's popup components when the clickable surface is a div.
-    return all
-      .filter(el => {
-        const parent = el.parentElement;
-        if (!parent) return true;
-        const parentText = label(parent);
-        return !/^generate video(?:\\s|✦|$)/i.test(parentText) ||
-          parentText.length > 80;
-      })
-      .filter(el => el.getAttribute("aria-disabled") !== "true");
+    // If the text is inside a styled wrapper, return the smallest matching
+    // element rather than the outer dialog/container.
+    return all.filter(el => {
+      const parent = el.parentElement;
+      if (!parent) return true;
+      const parentText = label(parent);
+      return !/^generate video(?:\\s|✦|$)/i.test(parentText) || parentText.length > 80;
+    });
   }
+
+  function findClickableAncestor(el) {
+    let current = el;
+    for (let i = 0; current && i < 6; i++, current = current.parentElement) {
+      if (
+        current.matches?.("button,[role='button'],a") ||
+        getComputedStyle(current).cursor === "pointer"
+      ) return current;
+    }
+    return el;
+  }
+
+  function forceClick(el) {
+    const target = findClickableAncestor(el);
+    target.scrollIntoView({behavior: "instant", block: "center", inline: "center"});
+    const rect = target.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    // First use the native click.
+    if (typeof target.click === "function") target.click();
+
+    // Then dispatch real mouse/pointer-style events for UI libraries that
+    // listen to pointer events on the clickable surface.
+    for (const type of ["pointerover", "pointermove", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      const EventClass = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+      target.dispatchEvent(new EventClass(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        button: 0
+      }));
+    }
+
+    // Finally click the element actually sitting under the center point.
+    const under = document.elementFromPoint(x, y);
+    if (under && under !== target && target.contains(under)) {
+      if (typeof under.click === "function") under.click();
+    }
+  }
+
   function cleanup() {
     c.observer?.disconnect();
     c.observer = null;
@@ -168,7 +217,7 @@
       // listen for pointer/click events on a wrapper instead of a native button.
       videoButton.dispatchEvent(new PointerEvent("pointerdown", {bubbles:true, cancelable:true, view:window}));
       videoButton.dispatchEvent(new PointerEvent("pointerup", {bubbles:true, cancelable:true, view:window}));
-      videoButton.click();
+      forceClick(videoButton);
 
       let started = false;
       for (let i = 0; i < 30 && c.running; i++) {
@@ -221,8 +270,14 @@
     if (m?.type === "PAVO_PAUSE") { pause("Paused by user").then(() => respond({ok:true})); return true; }
     if (m?.type === "PAVO_STOP") { stop().then(respond); return true; }
     if (m?.type === "PAVO_SCAN") {
-      respond({ok:true, generating: generating(), generateButtons: sceneGenerateButtons().length,
-        videoMenuButtons: videoMenuButtons().length});
+      const videoCandidates = videoMenuButtons();
+      respond({
+        ok: true,
+        generating: generating(),
+        generateButtons: sceneGenerateButtons().length,
+        videoMenuButtons: videoCandidates.length,
+        videoCandidateTexts: videoCandidates.slice(0, 5).map(label)
+      });
       return true;
     }
   });
