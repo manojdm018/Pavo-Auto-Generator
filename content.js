@@ -39,10 +39,19 @@
     const stop = buttons().some(b => /^(stop|cancel)$/.test(label(b)));
     return explicitText || stop;
   }
-  function generateButtons() {
+  function sceneGenerateButtons() {
     return buttons().filter(b =>
-      /^(\\+\\s*)?generate(\\s+video)?$/.test(label(b)) &&
-      !b.disabled && b.getAttribute("aria-disabled") !== "true"
+      /^generate$/.test(label(b)) &&
+      !b.disabled &&
+      b.getAttribute("aria-disabled") !== "true"
+    );
+  }
+
+  function videoMenuButtons() {
+    return buttons().filter(b =>
+      /^generate video\\b/.test(label(b)) &&
+      !b.disabled &&
+      b.getAttribute("aria-disabled") !== "true"
     );
   }
   function cleanup() {
@@ -86,31 +95,62 @@
       }
       await sleep(700);
       if (!c.running) return;
-      const target = generateButtons()[0];
-      if (!target) {
-        await pause("No enabled Generate button found. Check the page and press Resume.");
+      const sceneButton = sceneGenerateButtons()[0];
+      if (!sceneButton) {
+        await pause("No scene Generate button found. Check the page and press Resume.");
         return;
       }
-      target.scrollIntoView({behavior: "instant", block: "center"});
+
+      sceneButton.scrollIntoView({behavior: "instant", block: "center", inline: "nearest"});
       await sleep(250);
+
       if (generating()) {
         await pause("Generation detected before click; paused to prevent overlap.");
         return;
       }
-      target.click();
+
+      // Pavo requires two clicks:
+      // 1) scene Generate -> opens menu
+      // 2) Generate Video -> starts the actual video job
+      sceneButton.click();
+      await save({status: "Generation menu opened — selecting Generate Video"});
+
+      let videoButton = null;
+      for (let i = 0; i < 30 && c.running; i++) {
+        videoButton = videoMenuButtons()[0];
+        if (videoButton) break;
+        await sleep(200);
+      }
+
+      if (!videoButton) {
+        await pause("Generate menu opened, but Generate Video was not found. Check Pavo and press Resume.");
+        return;
+      }
+
+      videoButton.scrollIntoView({behavior: "instant", block: "center", inline: "nearest"});
+      await sleep(200);
+
+      if (generating()) {
+        await pause("A generation appeared before Generate Video was clicked.");
+        return;
+      }
+
+      videoButton.click();
 
       let started = false;
-      for (let i = 0; i < 24 && c.running; i++) {
+      for (let i = 0; i < 30 && c.running; i++) {
         await sleep(500);
-        if (generating() || !target.isConnected || target.disabled || /generating|stop/.test(label(target))) {
+        if (generating() || !videoButton.isConnected || videoButton.disabled || /generating|stop/.test(label(videoButton))) {
           started = true; break;
         }
       }
+
       if (!started) {
-        await pause("Could not confirm generation started. Check Pavo before resuming.");
+        await pause("Could not confirm that Pavo started video generation. Check Pavo before resuming.");
         return;
       }
-      const done = await waitUntilFinished(target);
+
+      const done = await waitUntilFinished(videoButton);
       cleanup();
       if (!done) return;
       const s = await state();
@@ -148,7 +188,8 @@
     if (m?.type === "PAVO_PAUSE") { pause("Paused by user").then(() => respond({ok:true})); return true; }
     if (m?.type === "PAVO_STOP") { stop().then(respond); return true; }
     if (m?.type === "PAVO_SCAN") {
-      respond({ok:true, generating: generating(), generateButtons: generateButtons().length});
+      respond({ok:true, generating: generating(), generateButtons: sceneGenerateButtons().length,
+        videoMenuButtons: videoMenuButtons().length});
       return true;
     }
   });
