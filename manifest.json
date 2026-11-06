@@ -5,7 +5,8 @@
   "description": "Generate Pavo scene videos one at a time with guarded completion detection.",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
     "https://app.pavo-ai.work/*"
