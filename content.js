@@ -64,30 +64,31 @@
   }
 
   function videoMenuButtons() {
-    const all = allVisibleElementsDeep()
-      .filter(visible)
+    // Pavo's menu buttons use the same star image asset. The star is NOT
+    // text; it is an <img src="/images/playlet/generate-star-white.svg">.
+    // Match the actual button structure instead of looking for "✦".
+    return allVisibleElementsDeep()
+      .filter(el => visible(el))
       .filter(el => {
-        const text = label(el);
-        return /^generate video(?:\\s|✦|$)/i.test(text) && text.length <= 80;
+        if (!el.matches?.("button")) return false;
+        if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+
+        const text = norm(
+          [...el.querySelectorAll("span")]
+            .map(span => span.textContent || "")
+            .join(" ")
+        );
+
+        if (!/^generate video(?:\\s|$)/i.test(text) && !text.includes("generate video")) {
+          return false;
+        }
+
+        const star = el.querySelector(
+          'img[src*="generate-star-white.svg"], img[src*="/images/playlet/generate-star-white.svg"]'
+        );
+
+        return !!star;
       });
-
-    // Prefer the most directly clickable element. Pavo may use a native
-    // button, role=button, or a styled div inside a dialog.
-    const preferred = all.filter(el =>
-      el.matches("button,[role='button'],a") &&
-      !el.disabled &&
-      el.getAttribute("aria-disabled") !== "true"
-    );
-    if (preferred.length) return preferred;
-
-    // If the text is inside a styled wrapper, return the smallest matching
-    // element rather than the outer dialog/container.
-    return all.filter(el => {
-      const parent = el.parentElement;
-      if (!parent) return true;
-      const parentText = label(parent);
-      return !/^generate video(?:\\s|✦|$)/i.test(parentText) || parentText.length > 80;
-    });
   }
 
   function findClickableAncestor(el) {
