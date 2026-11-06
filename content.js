@@ -63,32 +63,27 @@
     return out;
   }
 
-  function videoMenuButtons() {
-    // Pavo's menu buttons use the same star image asset. The star is NOT
-    // text; it is an <img src="/images/playlet/generate-star-white.svg">.
-    // Match the actual button structure instead of looking for "✦".
+  function menuButtons() {
     return allVisibleElementsDeep()
       .filter(el => visible(el))
       .filter(el => {
         if (!el.matches?.("button")) return false;
         if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
 
-        const text = norm(
-          [...el.querySelectorAll("span")]
-            .map(span => span.textContent || "")
-            .join(" ")
-        );
+        const text = norm(el.innerText || el.textContent);
+        if (!/^(generate image|generate video)\\b/i.test(text)) return false;
 
-        if (!/^generate video(?:\\s|$)/i.test(text) && !text.includes("generate video")) {
-          return false;
-        }
-
-        const star = el.querySelector(
-          'img[src*="generate-star-white.svg"], img[src*="/images/playlet/generate-star-white.svg"]'
-        );
-
+        const star = el.querySelector('img[src*="generate-star-white.svg"]');
         return !!star;
       });
+  }
+
+  function imageMenuButtons() {
+    return menuButtons().filter(b => /^generate image\\b/i.test(norm(b.innerText || b.textContent)));
+  }
+
+  function videoMenuButtons() {
+    return menuButtons().filter(b => /^generate video\\b/i.test(norm(b.innerText || b.textContent)));
   }
 
   function findClickableAncestor(el) {
@@ -164,16 +159,54 @@
       check();
     });
   }
+  async function waitForMenuButton(kind, timeoutMs = 8000) {
+    const started = Date.now();
+    while (c.running && Date.now() - started < timeoutMs) {
+      const found = kind === "image" ? imageMenuButtons()[0] : videoMenuButtons()[0];
+      if (found) return found;
+      await sleep(200);
+    }
+    return null;
+  }
+
+  async function clickAndWaitForGeneration(button, type) {
+    button.scrollIntoView({behavior: "instant", block: "center", inline: "center"});
+    await sleep(200);
+
+    if (generating()) {
+      await pause("Generation detected before Generate " + type + " was clicked.");
+      return false;
+    }
+
+    forceClick(button);
+
+    // Give Pavo time to change the button/UI into its generating state.
+    for (let i = 0; i < 30 && c.running; i++) {
+      await sleep(400);
+      if (generating() || !button.isConnected || button.disabled ||
+          /generating|processing|creating|rendering|stop/.test(label(button))) {
+        const done = await waitUntilFinished(button);
+        return done;
+      }
+    }
+
+    await pause("Could not confirm that Generate " + type + " started. Check Pavo before resuming.");
+    return false;
+  }
+
   async function processOne() {
     if (!c.running || c.paused || c.busy) return;
     c.busy = true;
+
     try {
       if (generating()) {
         await pause("A generation is already active. Wait, then press Resume.");
         return;
       }
+
       await sleep(700);
       if (!c.running) return;
+
       const sceneButton = sceneGenerateButtons()[0];
       if (!sceneButton) {
         await pause("No scene Generate button found. Check the page and press Resume.");
@@ -184,63 +217,50 @@
       await sleep(250);
 
       if (generating()) {
-        await pause("Generation detected before click; paused to prevent overlap.");
+        await pause("Generation detected before the scene Generate button was clicked.");
         return;
       }
 
-      // Pavo requires two clicks:
-      // 1) scene Generate -> opens menu
-      // 2) Generate Video -> starts the actual video job
-      sceneButton.click();
-      await save({status: "Generation menu opened — selecting Generate Video"});
+      // Each Pavo scene is a two-stage generation:
+      // Scene Generate -> Generate Image -> wait -> Generate Video -> wait.
+      forceClick(sceneButton);
+      await save({status: "Scene menu opened — selecting Generate Image"});
 
-      let videoButton = null;
-      for (let i = 0; i < 30 && c.running; i++) {
-        videoButton = videoMenuButtons()[0];
-        if (videoButton) break;
-        await sleep(200);
-      }
-
-      if (!videoButton) {
-        await pause("Generate menu opened, but Generate Video was not found. Check Pavo and press Resume.");
+      const imageButton = await waitForMenuButton("image");
+      if (!imageButton) {
+        await pause("Generate Image was not found in the menu. Check Pavo and press Resume.");
         return;
       }
 
-      videoButton.scrollIntoView({behavior: "instant", block: "center", inline: "nearest"});
-      await sleep(200);
-
-      if (generating()) {
-        await pause("A generation appeared before Generate Video was clicked.");
-        return;
-      }
-
-      // Use a real pointer-style click first. Some Pavo UI components
-      // listen for pointer/click events on a wrapper instead of a native button.
-      videoButton.dispatchEvent(new PointerEvent("pointerdown", {bubbles:true, cancelable:true, view:window}));
-      videoButton.dispatchEvent(new PointerEvent("pointerup", {bubbles:true, cancelable:true, view:window}));
-      forceClick(videoButton);
-
-      let started = false;
-      for (let i = 0; i < 30 && c.running; i++) {
-        await sleep(500);
-        if (generating() || !videoButton.isConnected || videoButton.disabled || /generating|stop/.test(label(videoButton))) {
-          started = true; break;
-        }
-      }
-
-      if (!started) {
-        await pause("Could not confirm that Pavo started video generation. Check Pavo before resuming.");
-        return;
-      }
-
-      const done = await waitUntilFinished(videoButton);
+      const imageDone = await clickAndWaitForGeneration(imageButton, "Image");
       cleanup();
-      if (!done) return;
-      const s = await state();
-      await save({completed: (s.completed || 0) + 1, status: "Video completed"});
+      if (!imageDone) return;
+
+      await save({status: "Reference image completed — selecting Generate Video"});
+      await sleep(700);
+
+      const videoButton = await waitForMenuButton("video");
+      if (!videoButton) {
+        await pause("Generate Video was not found after the reference image. Check Pavo and press Resume.");
+        return;
+      }
+
+      const videoDone = await clickAndWaitForGeneration(videoButton, "Video");
+      cleanup();
+      if (!videoDone) return;
+
+      const st = await state();
+      await save({
+        completed: (st.completed || 0) + 1,
+        status: "Image + video completed"
+      });
+
       c.busy = false;
       await sleep(900);
-      if (c.running && !c.paused) await processOne();
+
+      if (c.running && !c.paused) {
+        await processOne();
+      }
     } catch (e) {
       cleanup();
       await pause(e.message || "Pavo state unclear; queue paused.");
