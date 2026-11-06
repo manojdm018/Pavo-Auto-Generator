@@ -533,9 +533,18 @@
       const key = sceneKey(sceneIndex);
       const stored = await chrome.storage.local.get(key);
       const sceneProgress = stored[key] || {};
-      const imageAlreadyComplete =
-        sceneProgress.stage === "image-complete" ||
-        sceneProgress.stage === "video-in-progress";
+
+      // A prior video click may have happened just before a refresh or a
+      // timeout. Do not blindly click Video a second time; ask for a manual
+      // state check unless the video stage was conclusively completed.
+      if (sceneProgress.stage === "video-in-progress") {
+        await pause(
+          "Scene " + (sceneIndex + 1) + " already has a Video attempt recorded. Check Pavo's scene preview; I will not generate Image or Video again automatically."
+        );
+        return;
+      }
+
+      const imageAlreadyComplete = sceneProgress.stage === "image-complete";
 
       await save({
         currentScene: sceneIndex,
