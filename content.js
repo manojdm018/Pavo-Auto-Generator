@@ -31,16 +31,54 @@
   function buttons() {
     return [...document.querySelectorAll("button,[role='button']")].filter(visible);
   }
+  function generationStatus() {
+    // Do not search the whole page for words such as "creating" or
+    // "generating": those can appear in prompts, help text, or unrelated UI.
+    // Pavo's scene preview is the specific aspect-ratio container present
+    // in the DOM the user shared.
+    const previewCards = [...document.querySelectorAll('[class*="aspect-[533/300]"]')]
+      .filter(visible);
+    const activeLabel = /^(generating(?:\\.{1,3})?|processing(?:\\.{1,3})?|creating (?:image|video)(?:\\.{1,3})?|rendering(?:\\.{1,3})?|uploading(?:\\.{1,3})?|queued(?:\\.{1,3})?)$/i;
+    const evidence = [];
+
+    for (const card of previewCards) {
+      if (card.getAttribute("aria-busy") === "true") {
+        evidence.push("Scene preview is aria-busy");
+      }
+
+      const statusNodes = [...card.querySelectorAll("p,span,[role='status'],[aria-live]")]
+        .filter(visible);
+      for (const node of statusNodes) {
+        if (node.children.length > 1) continue;
+        const t = norm(node.innerText || node.textContent);
+        if (activeLabel.test(t)) evidence.push("Scene preview status: " + t);
+      }
+
+      const action = [...card.querySelectorAll("button,[role='button']")]
+        .find(b => visible(b) && /^(stop|cancel)$/.test(label(b)));
+      if (action) evidence.push("Scene preview has " + label(action) + " action");
+    }
+
+    // Some app versions expose generation state through an accessible live
+    // status outside the preview. Accept only an exact status label, never a
+    // substring from arbitrary page copy or prompts.
+    const accessibleStatuses = [...document.querySelectorAll("[role='status'],[aria-live]")]
+      .filter(visible);
+    for (const node of accessibleStatuses) {
+      const t = norm(node.innerText || node.textContent);
+      if (activeLabel.test(t)) evidence.push("Accessible status: " + t);
+    }
+
+    return {
+      active: evidence.length > 0,
+      reason: evidence[0] || "No active generation indicator found",
+      evidence,
+      previewCards: previewCards.length
+    };
+  }
+
   function generating() {
-    const activePattern = /\b(generating|processing|rendering|creating|uploading)\b/i;
-    const explicitText = [...document.querySelectorAll("body *")].some(el => {
-      if (!visible(el) || el.children.length > 3) return false;
-      const t = norm(el.innerText || el.textContent);
-      return /^(generating(?:\.{1,3})?|processing(?:\.{1,3})?|creating (?:image|video)(?:\.{1,3})?|rendering(?:\.{1,3})?|uploading(?:\.{1,3})?)$/.test(t) ||
-        activePattern.test(t);
-    });
-    const stop = buttons().some(b => /^(stop|cancel)$/.test(label(b)));
-    return explicitText || stop;
+    return generationStatus().active;
   }
 
   function sceneGenerateButtons() {
@@ -608,14 +646,26 @@
   }
   async function start() {
     if (c.running) return {ok: true};
-    if (generating()) return {ok: false, error: "Pavo is already generating. Let it finish before starting."};
+    const detection = generationStatus();
+    if (detection.active) {
+      return {
+        ok: false,
+        error: "Pavo generation detected: " + detection.reason + ". Check the scene preview before starting."
+      };
+    }
     c.running = true; c.paused = false;
     await save({running: true, paused: false, status: "Resuming from scene " + ((await state()).completed || 0) + " — scanning"});
     processOne();
     return {ok: true};
   }
   async function resume() {
-    if (generating()) return {ok: false, error: "A generation is still active. Resume after it finishes."};
+    const detection = generationStatus();
+    if (detection.active) {
+      return {
+        ok: false,
+        error: "Pavo generation detected: " + detection.reason + ". Resume after the scene preview is idle."
+      };
+    }
     return start();
   }
   async function stop() {
@@ -630,9 +680,11 @@
     if (m?.type === "PAVO_STOP") { stop().then(respond); return true; }
     if (m?.type === "PAVO_SCAN") {
       const videoCandidates = videoMenuButtons();
+      const generation = generationStatus();
       respond({
         ok: true,
-        generating: generating(),
+        generating: generation.active,
+        generation,
         generateButtons: sceneGenerateButtons().length,
         sceneCards: sceneCardInfo(),
         videoMenuButtons: videoCandidates.length,
