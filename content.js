@@ -255,14 +255,14 @@
   function visibleMenuActionLabels() {
     return buttons()
       .map(b => norm(b.innerText || b.textContent))
-      .filter(t => /^(generate image|generate video)\\b/.test(t));
+      .filter(t => /^(generate image|generate video)\b/.test(t));
   }
 
   function exactVideoMenuButton() {
     return menuButtons().find(b => {
       const text = norm(b.innerText || b.textContent);
       const hasWhiteStar = !!b.querySelector('img[src*="generate-star-white.svg"]');
-      return /^generate video(?:\\s|$)/.test(text) && hasWhiteStar;
+      return /^generate video(?:\s|$)/.test(text) && hasWhiteStar;
     }) || null;
   }
 
@@ -616,7 +616,7 @@
       if (!videoButton) {
         const visibleActions = visibleMenuActionLabels();
 
-        if (visibleActions.some(t => /^generate image(?:\\s|$)/.test(t))) {
+        if (visibleActions.some(t => /^generate image(?:\s|$)/.test(t))) {
           await pause(
             "Image is already complete, but Pavo's open menu does not expose a detectable Generate Video action. Visible actions: " +
             visibleActions.join(" | ") +
@@ -638,7 +638,7 @@
         videoButton = exactVideoMenuButton();
         const actionsAfterScroll = visibleMenuActionLabels();
 
-        if (!videoButton && actionsAfterScroll.some(t => /^generate image(?:\\s|$)/.test(t))) {
+        if (!videoButton && actionsAfterScroll.some(t => /^generate image(?:\s|$)/.test(t))) {
           await pause(
             "Image is complete, but Generate Video is not detectable in the open menu. Visible actions: " +
             actionsAfterScroll.join(" | ") +
@@ -667,7 +667,7 @@
       }
 
       const videoText = norm(videoButton.innerText || videoButton.textContent);
-      if (!/^generate video(?:\\s|$)/.test(videoText)) {
+      if (!/^generate video(?:\s|$)/.test(videoText)) {
         await pause("Safety check blocked an unexpected menu action: " + videoText);
         return;
       }
