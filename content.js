@@ -55,9 +55,12 @@
       .filter(visible)
       .filter(el => {
         const text = label(el);
+        // Pavo displays the two popup options as:
+        // "Generate Image ✦ 0"
+        // "Generate Video ✦ 0"
+        // We want ONLY the second one.
         return /^generate video(?:\\s|✦|$)/i.test(text) &&
-          text.length <= 80 &&
-          !/^generate video.*generate image/i.test(text);
+          text.length <= 80;
       });
 
     // Prefer native buttons / role=button when available.
