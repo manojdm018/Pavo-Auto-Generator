@@ -32,14 +32,17 @@
     return [...document.querySelectorAll("button,[role='button']")].filter(visible);
   }
   function generating() {
+    const activePattern = /\\b(generating|processing|rendering|creating|uploading)\\b/i;
     const explicitText = [...document.querySelectorAll("body *")].some(el => {
       if (!visible(el) || el.children.length > 3) return false;
       const t = norm(el.innerText || el.textContent);
-      return /^(generating(?:\\.\\.\\.)?|processing(?:\\.\\.\\.)?|creating video(?:\\.\\.\\.)?|rendering(?:\\.\\.\\.)?)$/.test(t);
+      return /^(generating(?:\\.{1,3})?|processing(?:\\.{1,3})?|creating (?:image|video)(?:\\.{1,3})?|rendering(?:\\.{1,3})?|uploading(?:\\.{1,3})?)$/.test(t) ||
+        activePattern.test(t);
     });
     const stop = buttons().some(b => /^(stop|cancel)$/.test(label(b)));
     return explicitText || stop;
   }
+
   function sceneGenerateButtons() {
     return buttons().filter(b =>
       /^generate$/.test(label(b)) &&
@@ -114,6 +117,61 @@
       text: norm(card.innerText || card.textContent).slice(0, 180),
       button: !!generateButtonInCard(card)
     }));
+  }
+
+  function cardSnapshot(card) {
+    if (!card || !card.isConnected) return "";
+    const text = norm(card.innerText || card.textContent);
+    const media = [...card.querySelectorAll("img,video,canvas")]
+      .map(el => {
+        if (el.tagName === "IMG") {
+          const src = el.currentSrc || el.src || "";
+          if (src.includes("/images/playlet/") || src.includes("generate-star")) return null;
+          return "img:" + src;
+        }
+        return el.tagName.toLowerCase();
+      })
+      .filter(Boolean);
+    const states = [...card.querySelectorAll("[aria-label],[data-state],[role='progressbar']")]
+      .map(el => [
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("data-state") || "",
+        el.getAttribute("role") || ""
+      ].join(":"));
+    return JSON.stringify({text, media, states});
+  }
+
+  function cardIsActive(card) {
+    if (!card || !card.isConnected) return false;
+    const text = norm(card.innerText || card.textContent);
+    if (/\\b(generating|processing|rendering|creating|uploading|queued)\\b/.test(text)) return true;
+    return [...card.querySelectorAll("button,[role='button']")]
+      .some(b => /^(stop|cancel)$/.test(label(b)));
+  }
+
+  function cardHasOutput(card, kind, beforeSnapshot) {
+    if (!card || !card.isConnected || cardSnapshot(card) === beforeSnapshot) return false;
+
+    const text = norm(card.innerText || card.textContent);
+    const realImages = [...card.querySelectorAll("img")].filter(img => {
+      const src = img.currentSrc || img.src || "";
+      return !!src && !src.includes("/images/playlet/") &&
+        !src.includes("generate-star") && !src.startsWith("data:image/svg");
+    });
+
+    if (kind === "Image") {
+      return realImages.length > 0 ||
+        /image (ready|generated|complete)|reference image/.test(text) ||
+        (!text.includes("waiting to generate") && !/\\b(generating|processing|rendering|creating|uploading)\\b/.test(text));
+    }
+
+    return card.querySelector("video") !== null ||
+      /video (ready|generated|complete)|play video/.test(text);
+  }
+
+  function cardForSceneButton(button, index) {
+    const cards = sceneCards();
+    return cards.find(card => card.contains(button)) || cards[index] || null;
   }
 
   function allVisibleElementsDeep(root = document) {
@@ -339,7 +397,12 @@
     return null;
   }
 
-  async function clickAndWaitForGeneration(button, type) {
+  async function clickAndWaitForGeneration(button, type, getCard) {
+    if (!button || !button.isConnected) {
+      await pause("Generate " + type + " action disappeared before it could be clicked.");
+      return false;
+    }
+
     button.scrollIntoView({behavior: "instant", block: "center", inline: "center"});
     await sleep(200);
 
@@ -348,19 +411,54 @@
       return false;
     }
 
+    const initialCard = typeof getCard === "function" ? getCard() : null;
+    const beforeSnapshot = cardSnapshot(initialCard);
     forceClick(button);
+    await save({status: "Generate " + type + " selected — verifying Pavo started"});
 
-    // Give Pavo time to change the button/UI into its generating state.
-    for (let i = 0; i < 30 && c.running; i++) {
-      await sleep(400);
-      if (generating() || !button.isConnected || button.disabled ||
-          /generating|processing|creating|rendering|stop/.test(label(button))) {
-        const done = await waitUntilFinished(button);
-        return done;
+    const startedAt = Date.now();
+    let observedActive = false;
+    let lastSnapshot = beforeSnapshot;
+    let stableAfterChange = 0;
+
+    while (c.running && Date.now() - startedAt < c.maxMs) {
+      const card = (typeof getCard === "function" ? getCard() : null) ||
+        (initialCard && initialCard.isConnected ? initialCard : null);
+      const snapshot = cardSnapshot(card);
+      const active = generating() || cardIsActive(card);
+      const changed = !!snapshot && snapshot !== beforeSnapshot;
+      const hasOutput = cardHasOutput(card, type, beforeSnapshot);
+
+      if (active) {
+        observedActive = true;
+        stableAfterChange = 0;
+      } else if (changed && hasOutput) {
+        if (snapshot === lastSnapshot) stableAfterChange++;
+        else stableAfterChange = 1;
+      } else if (observedActive && changed) {
+        if (snapshot === lastSnapshot) stableAfterChange++;
+        else stableAfterChange = 1;
+      } else {
+        stableAfterChange = 0;
       }
+
+      // The menu's Generate Image/Video button is removed when the menu
+      // closes. That is normal and is deliberately NOT treated as completion.
+      // Require either a witnessed active state followed by a changed,
+      // stable scene, or a completed output appearing without an activity
+      // indicator (for very fast generations).
+      if (changed && !active && hasOutput && stableAfterChange >= 4) {
+        return true;
+      }
+      if (observedActive && changed && !active && stableAfterChange >= 4) {
+        return true;
+      }
+
+      lastSnapshot = snapshot;
+      await sleep(1200);
     }
 
-    await pause("Could not confirm that Generate " + type + " started. Check Pavo before resuming.");
+    await pause("Could not verify that Generate " + type + " finished. Queue paused to avoid starting the next stage too early.");
     return false;
   }
 
@@ -381,8 +479,6 @@
       // Never fall back to [0], otherwise Pavo can regenerate Scene 1 forever.
       const stBefore = await state();
       const sceneIndex = Number(stBefore.completed || 0);
-      const sceneButtons = sceneGenerateButtons();
-
       // The completed count is our durable checkpoint. Also persist the
       // current scene index so a page refresh can resume from the same scene.
       await chrome.storage.local.set({
@@ -396,6 +492,13 @@
       }
       await bringIntoView(positionedSceneButton, 3);
       await sleep(300);
+
+      const originalSceneCard = cardForSceneButton(positionedSceneButton, sceneIndex);
+      const getCurrentSceneCard = () => {
+        const currentCards = sceneCards();
+        return currentCards[sceneIndex] ||
+          (originalSceneCard && originalSceneCard.isConnected ? originalSceneCard : null);
+      };
 
       if (generating()) {
         await pause("Generation detected before the scene Generate button was clicked.");
@@ -413,11 +516,11 @@
         return;
       }
 
-      const imageDone = await clickAndWaitForGeneration(imageButton, "Image");
+      const imageDone = await clickAndWaitForGeneration(imageButton, "Image", getCurrentSceneCard);
       cleanup();
       if (!imageDone) return;
 
-      await save({status: "Reference image completed — opening menu for Generate Video"});
+      await save({status: "Reference image confirmed — preparing Generate Video"});
       await sleep(1000);
 
       // After image generation, Pavo may either keep the menu open or close it.
@@ -451,7 +554,7 @@
         return;
       }
 
-      const videoDone = await clickAndWaitForGeneration(videoButton, "Video");
+      const videoDone = await clickAndWaitForGeneration(videoButton, "Video", getCurrentSceneCard);
       cleanup();
       if (!videoDone) return;
 
