@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Pavo Auto Generator",
+  "version": "0.1.0",
+  "description": "Generate Pavo scene videos one at a time with guarded completion detection.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://app.pavo-ai.work/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Pavo Auto Generator",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.pavo-ai.work/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
