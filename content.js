@@ -250,14 +250,33 @@
       if (!videoDone) return;
 
       const st = await state();
+      const nextCompleted = (st.completed || 0) + 1;
+      const nextDelay = 5;
       await save({
-        completed: (st.completed || 0) + 1,
-        status: "Image + video completed"
+        completed: nextCompleted,
+        status: "Completed — scrolling to next scene",
+        nextAt: Date.now() + nextDelay * 1000,
+        nextDelay
       });
 
       c.busy = false;
-      await sleep(900);
 
+      // Move the next scene into view before starting it.
+      const nextButton = sceneGenerateButtons()[nextCompleted];
+      if (nextButton) {
+        nextButton.scrollIntoView({behavior: "smooth", block: "center", inline: "nearest"});
+      }
+
+      for (let remaining = nextDelay; remaining > 0 && c.running && !c.paused; remaining--) {
+        await save({
+          status: "Next scene in " + remaining + "s",
+          nextAt: Date.now() + remaining * 1000,
+          nextDelay: remaining
+        });
+        await sleep(1000);
+      }
+
+      await save({nextAt: 0, nextDelay: 0, status: "Starting next scene"});
       if (c.running && !c.paused) {
         await processOne();
       }
