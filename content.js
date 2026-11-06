@@ -241,12 +241,25 @@
       cleanup();
       if (!imageDone) return;
 
-      await save({status: "Reference image completed — selecting Generate Video"});
-      await sleep(700);
+      await save({status: "Reference image completed — opening menu for Generate Video"});
+      await sleep(1000);
+
+      // Pavo closes the generation menu after the image is created.
+      // Re-open this SAME scene's Generate menu before looking for Video.
+      const videoSceneButton = sceneGenerateButtons()[sceneIndex];
+      if (!videoSceneButton) {
+        await pause("The current scene Generate button was not found after the image. Check Pavo and press Resume.");
+        return;
+      }
+
+      videoSceneButton.scrollIntoView({behavior: "instant", block: "center", inline: "center"});
+      await sleep(300);
+      forceClick(videoSceneButton);
+      await sleep(500);
 
       const videoButton = await waitForMenuButton("video");
       if (!videoButton) {
-        await pause("Generate Video was not found after the reference image. Check Pavo and press Resume.");
+        await pause("Generate Video was not found in the reopened scene menu. Check Pavo and press Resume.");
         return;
       }
 
